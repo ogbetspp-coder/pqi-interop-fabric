@@ -1,0 +1,12 @@
+{
+  "id": "dose-form-local-to-fhir",
+  "description": "Maps NovaPharma ERP local dose form terms to EDQM standard terms",
+  "source_system": "NovaPharma ERP",
+  "target_system": "http://standardterms.edqm.eu",
+  "mappings": [
+    {"local": "tablet",              "code": "10219000", "display": "Tablet"},
+    {"local": "capsule",             "code": "10210000", "display": "Capsule"},
+    {"local": "film-coated tablet",  "code": "10221000", "display": "Film-coated tablet"},
+    {"local": "oral",                "route_code": "20053000", "route_display": "Oral use"}
+  ]
+}

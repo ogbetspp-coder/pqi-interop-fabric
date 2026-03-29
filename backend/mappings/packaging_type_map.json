@@ -1,0 +1,11 @@
+{
+  "id": "packaging-type-local-to-fhir",
+  "description": "Maps NovaPharma ERP local packaging family codes to FHIR R5 packaging-type codes",
+  "source_system": "NovaPharma ERP",
+  "target_system": "http://hl7.org/fhir/packaging-type",
+  "mappings": [
+    {"local": "BOTTLE",  "code": "100000073497", "display": "Bottle"},
+    {"local": "BLISTER", "code": "100000073496", "display": "Blister"},
+    {"local": "CARTON",  "code": "100000073508", "display": "Carton"}
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "id": "closure-type-local-to-fhir",
+  "description": "Maps PackVault PLM local component types to container-closure-type codes",
+  "source_system": "PackVault PLM",
+  "target_system": "http://terminology.hl7.org/CodeSystem/container-closure-type",
+  "mappings": [
+    {"local": "CHILD_RESISTANT_CLOSURE", "code": "Child Proof Cap",           "display": "Child Proof Cap"},
+    {"local": "FOIL_SEAL",               "code": "Multi-layer Foil Seal Liner","display": "Multi-layer Foil Seal Liner"},
+    {"local": "BLISTER_BODY",            "code": "Blister",                    "display": "Blister"},
+    {"local": "BLISTER_LID",             "code": "Lidding Foil",               "display": "Lidding Foil"}
+  ]
+}

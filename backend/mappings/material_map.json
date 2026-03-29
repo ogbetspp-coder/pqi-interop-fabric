@@ -1,0 +1,16 @@
+{
+  "id": "material-local-to-fhir",
+  "description": "Maps NovaPharma ERP / PackVault PLM local material terms to FHIR R5 package-material codes",
+  "source_system": "NovaPharma ERP + PackVault PLM",
+  "target_system": "http://hl7.org/fhir/package-material",
+  "mappings": [
+    {"local": "High-density polyethylene (HDPE)", "code": "200000003215", "display": "High Density PolyEthylene"},
+    {"local": "HDPE",                             "code": "200000003215", "display": "High Density PolyEthylene"},
+    {"local": "Polypropylene",                    "code": "200000003219", "display": "PolyPropylene"},
+    {"local": "PP",                               "code": "200000003219", "display": "PolyPropylene"},
+    {"local": "Aluminum foil",                    "code": "200000003200", "display": "Aluminium"},
+    {"local": "Aluminium foil",                   "code": "200000003200", "display": "Aluminium"},
+    {"local": "PVC/Alu foil",                     "code": "200000003222", "display": "PolyVinylChloride"},
+    {"local": "Paperboard",                       "code": "200000003529", "display": "Paper"}
+  ]
+}
