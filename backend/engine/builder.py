@@ -6,6 +6,15 @@ and returns a complete FHIR resource dict ready for HAPI.
 
 No DB access, no HAPI access, no side effects.
 Deterministic: same inputs always produce the same output.
+
+Mapping conventions:
+  dose_form_map   — local dose form term → EDQM code/display
+  route_map       — local route term → EDQM code/display (separate domain from dose form)
+  material_map    — local material term → list of codings (supports composites)
+  packaging_type_map — local packaging family → FHIR packaging-type code
+  closure_type_map   — local component type → container-closure-type code
+  qs_rules        — component_type + market → list of quality standard codings
+  marketing_status_map — local status text → FHIR CodeableConcept code/display
 """
 
 from backend.models.source_models import ErpProduct, ErpPresentation, PlmComponent
@@ -26,11 +35,31 @@ def ppd_id(presentation_id: str) -> str:
 
 # ── Mapping helpers ────────────────────────────────────────────────────────────
 
-def _map(local: str, mappings: list[dict], key: str = "local") -> dict | None:
+def _map_single(local: str, mappings: list[dict]) -> dict | None:
+    """Find first entry whose 'local' field matches (case-insensitive)."""
     for m in mappings:
-        if m.get(key, "").lower() == local.lower():
+        if m.get("local", "").lower() == local.lower():
             return m
     return None
+
+
+def _map_material_codings(local: str, mappings: list[dict]) -> list[dict]:
+    """
+    Return the FHIR material coding list for a local material string.
+    Supports composite materials (multiple codings per entry).
+    Falls back to a text-only coding if no mapping exists.
+    """
+    for m in mappings:
+        if m.get("local", "").lower() == local.lower():
+            return [
+                {
+                    "system": "http://hl7.org/fhir/package-material",
+                    "code": c["code"],
+                    "display": c["display"],
+                }
+                for c in m["codings"]
+            ]
+    return [{"text": local}]
 
 
 def _quality_standards(
@@ -62,14 +91,18 @@ def _quality_standards(
 
 # ── MedicinalProductDefinition ─────────────────────────────────────────────────
 
-def build_mpd(product: ErpProduct, dose_form_mappings: list[dict]) -> tuple[dict, list[dict]]:
+def build_mpd(
+    product: ErpProduct,
+    dose_form_mappings: list[dict],
+    route_mappings: list[dict],
+) -> tuple[dict, list[dict]]:
     """
     Returns (resource_dict, mappings_applied).
     mappings_applied records which local terms were resolved for the trace.
     """
     applied: list[dict] = []
 
-    dose_form_match = _map(product.dose_form, dose_form_mappings)
+    dose_form_match = _map_single(product.dose_form, dose_form_mappings)
     if dose_form_match:
         applied.append({"type": "dose_form", "local": product.dose_form,
                          "code": dose_form_match["code"], "display": dose_form_match["display"]})
@@ -79,13 +112,13 @@ def build_mpd(product: ErpProduct, dose_form_mappings: list[dict]) -> tuple[dict
     else:
         dose_form_coding = [{"text": product.dose_form}]
 
-    route_match = _map(product.route, dose_form_mappings, key="local")
-    if route_match and "route_code" in route_match:
+    route_match = _map_single(product.route, route_mappings)
+    if route_match:
         applied.append({"type": "route", "local": product.route,
-                         "code": route_match["route_code"], "display": route_match["route_display"]})
+                         "code": route_match["code"], "display": route_match["display"]})
         route_coding = [{"system": "http://standardterms.edqm.eu",
-                          "code": route_match["route_code"],
-                          "display": route_match["route_display"]}]
+                          "code": route_match["code"],
+                          "display": route_match["display"]}]
     else:
         route_coding = [{"text": product.route}]
 
@@ -141,10 +174,13 @@ def build_mpd(product: ErpProduct, dose_form_mappings: list[dict]) -> tuple[dict
 
 # ── ManufacturedItemDefinition ─────────────────────────────────────────────────
 
-def build_mid(product: ErpProduct, dose_form_mappings: list[dict]) -> tuple[dict, list[dict]]:
+def build_mid(
+    product: ErpProduct,
+    dose_form_mappings: list[dict],
+) -> tuple[dict, list[dict]]:
     applied: list[dict] = []
 
-    dose_form_match = _map(product.dose_form, dose_form_mappings)
+    dose_form_match = _map_single(product.dose_form, dose_form_mappings)
     if dose_form_match:
         applied.append({"type": "dose_form", "local": product.dose_form,
                          "code": dose_form_match["code"], "display": dose_form_match["display"]})
@@ -179,36 +215,71 @@ def build_ppd(
     packaging_type_mappings: list[dict],
     closure_type_mappings: list[dict],
     qs_rules: list[dict],
-    marketing_status: str,
+    marketing_status_local: str,
+    marketing_status_mappings: list[dict],
+    approval_date: str | None,
 ) -> tuple[dict, list[dict]]:
     applied: list[dict] = []
 
-    market_iso = {
-        "US": {"code": "US", "display": "United States"},
-        "EU": {"code": "EU", "display": "European Union"},
-        "CA": {"code": "CA", "display": "Canada"},
-    }.get(presentation.market, {"code": presentation.market, "display": presentation.market})
+    # Market — country for US/CA; jurisdiction for EU
+    market_country = {
+        "US": {"code": "US", "display": "United States", "use": "country"},
+        "CA": {"code": "CA", "display": "Canada",         "use": "country"},
+        "EU": {"code": "EU", "display": "European Union", "use": "jurisdiction"},
+    }.get(presentation.market, {"code": presentation.market, "display": presentation.market, "use": "country"})
+
+    # Marketing status as CodeableConcept
+    ms_match = _map_single(marketing_status_local, marketing_status_mappings)
+    if ms_match:
+        applied.append({"type": "marketing_status", "local": marketing_status_local,
+                         "code": ms_match["code"], "display": ms_match["display"]})
+        ms_status = {"coding": [{"system": "http://hl7.org/fhir/publication-status",
+                                  "code": ms_match["code"], "display": ms_match["display"]}]}
+    else:
+        ms_status = {"text": marketing_status_local}
+
+    marketing_status_entry: dict = {
+        "status": ms_status,
+    }
+    # Use country vs jurisdiction correctly
+    if market_country["use"] == "jurisdiction":
+        marketing_status_entry["jurisdiction"] = {"coding": [{
+            "system": "urn:iso:std:iso:3166",
+            "code": market_country["code"],
+            "display": market_country["display"],
+        }]}
+    else:
+        marketing_status_entry["country"] = {"coding": [{
+            "system": "urn:iso:std:iso:3166",
+            "code": market_country["code"],
+            "display": market_country["display"],
+        }]}
+
+    # Populate dateRange.start from RIM approval date if available
+    if approval_date:
+        marketing_status_entry["dateRange"] = {"start": approval_date}
 
     # Build packaging node for a single component
     def _component_node(comp: PlmComponent, children: list[dict]) -> dict:
-        mat_match = _map(comp.material_local, material_mappings)
-        if mat_match:
-            applied.append({"type": "material", "local": comp.material_local,
-                             "code": mat_match["code"], "display": mat_match["display"]})
-            material_coding = [{"system": "http://hl7.org/fhir/package-material",
-                                 "code": mat_match["code"], "display": mat_match["display"]}]
-        else:
-            material_coding = [{"text": comp.material_local}]
+        mat_codings = _map_material_codings(comp.material_local, material_mappings)
+        # Record each coding in the applied trace
+        for c in mat_codings:
+            if "code" in c:
+                applied.append({"type": "material", "local": comp.material_local,
+                                 "code": c["code"], "display": c["display"]})
+            else:
+                applied.append({"type": "material", "local": comp.material_local,
+                                 "code": None, "display": c.get("text", comp.material_local)})
 
         node: dict = {
-            "material": [{"coding": material_coding}],
+            "material": [{"coding": mat_codings}],
             "manufacturer": [{"display": comp.supplier}],
         }
 
         # Component type coding
         if comp.component_type in ("CHILD_RESISTANT_CLOSURE", "FOIL_SEAL",
                                    "BLISTER_BODY", "BLISTER_LID"):
-            ct_match = _map(comp.component_type, closure_type_mappings)
+            ct_match = _map_single(comp.component_type, closure_type_mappings)
             if ct_match:
                 applied.append({"type": "closure_type", "local": comp.component_type,
                                  "code": ct_match["code"], "display": ct_match["display"]})
@@ -220,7 +291,7 @@ def build_ppd(
             node["componentPart"] = True
         else:
             # Root container (BOTTLE etc.) — use packaging-type system
-            pt_match = _map(comp.component_type, packaging_type_mappings)
+            pt_match = _map_single(comp.component_type, packaging_type_mappings)
             if pt_match:
                 applied.append({"type": "packaging_type", "local": comp.component_type,
                                  "code": pt_match["code"], "display": pt_match["display"]})
@@ -241,10 +312,6 @@ def build_ppd(
         return node
 
     # Build hierarchy bottom-up
-    # Index components by component_id
-    by_id = {c.component_id: c for c in components}
-
-    # Find root (no parent) and children map
     roots = [c for c in components if c.parent_component_id is None]
     children_of: dict[str, list[PlmComponent]] = {}
     for c in components:
@@ -259,7 +326,6 @@ def build_ppd(
     if roots:
         root = roots[0]
         packaging_node = _build_node_recursive(root)
-        # Root bottle: add containedItem pointing to MID
         packaging_node["containedItem"] = [{
             "item": {
                 "reference": {"reference": f"ManufacturedItemDefinition/{mid_id(presentation.product_code)}"}
@@ -288,25 +354,16 @@ def build_ppd(
                 "http://hl7.org/fhir/uv/pharm-quality/StructureDefinition/PackagedProductDefinition-drug-pq"
             ]
         },
-        "name": (
-            f"{presentation.local_packaging_text or presentation.presentation_id}"
-        ),
+        "name": (presentation.local_packaging_text or presentation.presentation_id),
         "description": (
             f"{presentation.packaging_family.capitalize()} presentation, "
             f"{presentation.pack_count} {presentation.pack_unit}s, "
-            f"{market_iso['display']} market. "
+            f"{market_country['display']} market. "
             "Primary container closure system only; secondary carton excluded from structured hierarchy."
         ),
         "packageFor": [{"reference": f"MedicinalProductDefinition/{mpd_id(presentation.product_code)}"}],
         "containedItemQuantity": [{"value": presentation.pack_count, "unit": presentation.pack_unit}],
-        "marketingStatus": [{
-            "country": {"coding": [{
-                "system": "urn:iso:std:iso:3166",
-                "code": market_iso["code"],
-                "display": market_iso["display"],
-            }]},
-            "status": {"text": marketing_status},
-        }],
+        "marketingStatus": [marketing_status_entry],
         "packaging": packaging_node,
     }
     return resource, applied

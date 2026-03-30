@@ -1,0 +1,12 @@
+{
+  "id": "marketing-status-local-to-fhir",
+  "description": "Maps ReguTrack RIM local marketing status terms to FHIR R5 CodeableConcept values. Separate from other maps because this is a regulatory domain concept.",
+  "source_system": "ReguTrack RIM",
+  "target_system": "http://hl7.org/fhir/publication-status",
+  "mappings": [
+    {"local": "authorised",   "code": "active",   "display": "Authorised"},
+    {"local": "withdrawn",    "code": "retired",  "display": "Withdrawn"},
+    {"local": "suspended",    "code": "draft",    "display": "Suspended"},
+    {"local": "unknown",      "code": "unknown",  "display": "Unknown"}
+  ]
+}

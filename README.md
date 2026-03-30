@@ -124,6 +124,23 @@ pytest tests/ -v
 
 ---
 
+## Phase 1.5 — Standards corrections applied
+
+The following corrections were applied after the initial Phase 1 build. Each fixes a real interoperability error, not a cosmetic issue.
+
+| Area | Before | After | Why it matters |
+|---|---|---|---|
+| **Closure type codes** | `BLISTER_LID` mapped to `"Lidding Foil"` (fabricated code) | Corrected to `"Blister Foil Lidding"` (official PQI IG code) | Receivers using the PQI IG CodeSystem would reject the fabricated code |
+| **Route/dose form separation** | Route term `"oral"` was mixed into `dose_form_map.json` | Split into separate `route_map.json` | Route and dose form are distinct EDQM terminology domains — mixing them breaks CodeSystem reference resolution |
+| **Composite material** | `PVC/Alu foil` mapped to a single PVC coding, silently discarding aluminium | Now emits two codings: `PolyVinylChloride` + `Aluminium` | Blister aluminium lidding is a distinct material component with its own EDQM code |
+| **MarketingStatus** | Status was a free-text string | Now a `CodeableConcept` with FHIR code + `dateRange.start` from RIM approval date + correct `country`/`jurisdiction` distinction for EU | FHIR R5 MarketingStatus is a typed structure; plain text fails profile validation |
+| **If-Match on PUT** | All PUTs were unconditional | PUTs now include `If-Match: W/"versionId"` for optimistic locking; 412 triggers a single retry | Prevents silent overwrite of concurrent version changes in HAPI |
+| **Run lifecycle tracking** | Engine runs had no persistent state | Each run writes a `canonical_runs` row with `started`/`completed`/`failed` status and summary | Required for auditability and for the UI `/ui/latest-run` endpoint |
+| **Mapping artifact hashes** | No record of which mapping files were active at run time | SHA-256 of each mapping file is recorded in every `canonical_run_traces` row | Enables detection of mapping drift between runs |
+| **Hardcoded inventories** | `list_canonical()` and `reset()` contained hardcoded resource ID lists | Both now driven by `canonical_fingerprints` registry | Hardcoded lists break silently when new market variants are added |
+
+---
+
 ## Technical compromises in Phase 1
 
 1. **Single backend process.** All source domains, engine, events, and downstream consumer run in one FastAPI process. Service separation is intentionally deferred to Phase 2 once flows are proven.

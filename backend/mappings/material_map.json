@@ -1,16 +1,44 @@
 {
   "id": "material-local-to-fhir",
-  "description": "Maps NovaPharma ERP / PackVault PLM local material terms to FHIR R5 package-material codes",
+  "description": "Maps NovaPharma ERP / PackVault PLM local material terms to FHIR R5 package-material codes. Composite materials (multi-layer) map to multiple codings — builder.py handles this by emitting a multi-coding material array.",
   "source_system": "NovaPharma ERP + PackVault PLM",
   "target_system": "http://hl7.org/fhir/package-material",
   "mappings": [
-    {"local": "High-density polyethylene (HDPE)", "code": "200000003215", "display": "High Density PolyEthylene"},
-    {"local": "HDPE",                             "code": "200000003215", "display": "High Density PolyEthylene"},
-    {"local": "Polypropylene",                    "code": "200000003219", "display": "PolyPropylene"},
-    {"local": "PP",                               "code": "200000003219", "display": "PolyPropylene"},
-    {"local": "Aluminum foil",                    "code": "200000003200", "display": "Aluminium"},
-    {"local": "Aluminium foil",                   "code": "200000003200", "display": "Aluminium"},
-    {"local": "PVC/Alu foil",                     "code": "200000003222", "display": "PolyVinylChloride"},
-    {"local": "Paperboard",                       "code": "200000003529", "display": "Paper"}
+    {
+      "local": "High-density polyethylene (HDPE)",
+      "codings": [{"code": "200000003215", "display": "High Density PolyEthylene"}]
+    },
+    {
+      "local": "HDPE",
+      "codings": [{"code": "200000003215", "display": "High Density PolyEthylene"}]
+    },
+    {
+      "local": "Polypropylene",
+      "codings": [{"code": "200000003219", "display": "PolyPropylene"}]
+    },
+    {
+      "local": "PP",
+      "codings": [{"code": "200000003219", "display": "PolyPropylene"}]
+    },
+    {
+      "local": "Aluminum foil",
+      "codings": [{"code": "200000003200", "display": "Aluminium"}]
+    },
+    {
+      "local": "Aluminium foil",
+      "codings": [{"code": "200000003200", "display": "Aluminium"}]
+    },
+    {
+      "local": "PVC/Alu foil",
+      "codings": [
+        {"code": "200000003222", "display": "PolyVinylChloride"},
+        {"code": "200000003200", "display": "Aluminium"}
+      ],
+      "note": "Composite blister material. Both PVC and aluminium components are represented as separate codings per FHIR material array semantics."
+    },
+    {
+      "local": "Paperboard",
+      "codings": [{"code": "200000003529", "display": "Paper"}]
+    }
   ]
 }

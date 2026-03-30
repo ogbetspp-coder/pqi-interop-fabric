@@ -71,17 +71,27 @@ CREATE TABLE canonical_events (
 
 -- Per-resource trace: which source rows fed it, which mappings were applied
 CREATE TABLE canonical_run_traces (
-    trace_id            TEXT PRIMARY KEY,
-    run_id              TEXT NOT NULL,
-    resource_id         TEXT NOT NULL,
-    resource_type       TEXT NOT NULL,
-    source_rows         JSONB NOT NULL DEFAULT '{}',
-    mappings_applied    JSONB NOT NULL DEFAULT '[]',
-    fingerprint_before  TEXT,
-    fingerprint_after   TEXT NOT NULL,
-    action              TEXT NOT NULL,  -- CREATED, UPDATED, SKIPPED
-    reason              TEXT,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    trace_id                TEXT PRIMARY KEY,
+    run_id                  TEXT NOT NULL,
+    resource_id             TEXT NOT NULL,
+    resource_type           TEXT NOT NULL,
+    source_rows             JSONB NOT NULL DEFAULT '{}',
+    mappings_applied        JSONB NOT NULL DEFAULT '[]',
+    mapping_artifact_hashes JSONB,                       -- sha256 of each mapping file at run time
+    fingerprint_before      TEXT,
+    fingerprint_after       TEXT NOT NULL,
+    action                  TEXT NOT NULL,  -- CREATED, UPDATED, SKIPPED
+    reason                  TEXT,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Run lifecycle — one row per engine run
+CREATE TABLE canonical_runs (
+    run_id       TEXT PRIMARY KEY,
+    status       TEXT NOT NULL DEFAULT 'started',  -- started, completed, failed
+    started_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    summary      JSONB
 );
 
 -- Downstream GlobalRIM mock consumer inbox

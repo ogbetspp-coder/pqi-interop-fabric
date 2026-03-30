@@ -5,6 +5,7 @@ Rules enforced here:
 - All PUTs include If-Match only when we have a known version (for optimistic locking).
 - GET before PUT is skipped; fingerprint cache in Postgres is the gatekeeper.
 - Returns (version_id, resource_dict) or raises on non-2xx.
+- IfMatchConflict is raised on 412; caller must decide whether to retry.
 """
 
 import os
@@ -12,6 +13,10 @@ import httpx
 
 HAPI_BASE = os.environ.get("HAPI_BASE_URL", "http://localhost:8080/fhir")
 HEADERS = {"Content-Type": "application/fhir+json", "Accept": "application/fhir+json"}
+
+
+class IfMatchConflict(Exception):
+    """HAPI returned 412 Precondition Failed — server version has moved past our cached version."""
 
 
 def _client() -> httpx.Client:
@@ -30,12 +35,28 @@ def get_resource(resource_type: str, resource_id: str) -> tuple[str | None, dict
         return version, body
 
 
-def put_resource(resource_type: str, resource_id: str, resource: dict) -> str:
-    """PUT resource to HAPI. Returns new versionId."""
+def put_resource(
+    resource_type: str,
+    resource_id: str,
+    resource: dict,
+    if_match_version: str | None = None,
+) -> str:
+    """
+    PUT resource to HAPI. Returns new versionId.
+
+    If if_match_version is provided, sends If-Match: W/"<version>" for optimistic locking.
+    Raises IfMatchConflict on 412 — caller must refresh version and retry if desired.
+    """
+    extra_headers = {}
+    if if_match_version is not None:
+        extra_headers["If-Match"] = f'W/"{if_match_version}"'
     with _client() as c:
-        r = c.put(f"/{resource_type}/{resource_id}", json=resource)
+        r = c.put(f"/{resource_type}/{resource_id}", json=resource, headers=extra_headers)
+        if r.status_code == 412:
+            raise IfMatchConflict(
+                f"{resource_type}/{resource_id}: server has moved past version {if_match_version}"
+            )
         r.raise_for_status()
-        # HAPI returns the updated resource with meta.versionId
         body = r.json()
         return body.get("meta", {}).get("versionId", "?")
 

@@ -1,0 +1,11 @@
+{
+  "id": "route-local-to-fhir",
+  "description": "Maps NovaPharma ERP local route terms to EDQM standard route codes. Intentionally separate from dose_form_map — route and dose form are distinct terminology domains.",
+  "source_system": "NovaPharma ERP",
+  "target_system": "http://standardterms.edqm.eu",
+  "mappings": [
+    {"local": "oral",       "code": "20053000", "display": "Oral use"},
+    {"local": "topical",    "code": "20163000", "display": "Cutaneous use"},
+    {"local": "parenteral", "code": "20045000", "display": "Parenteral use"}
+  ]
+}

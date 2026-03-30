@@ -7,6 +7,6 @@
     {"local": "CHILD_RESISTANT_CLOSURE", "code": "Child Proof Cap",           "display": "Child Proof Cap"},
     {"local": "FOIL_SEAL",               "code": "Multi-layer Foil Seal Liner","display": "Multi-layer Foil Seal Liner"},
     {"local": "BLISTER_BODY",            "code": "Blister",                    "display": "Blister"},
-    {"local": "BLISTER_LID",             "code": "Lidding Foil",               "display": "Lidding Foil"}
+    {"local": "BLISTER_LID",             "code": "Blister Foil Lidding",       "display": "Blister Foil Lidding"}
   ]
 }

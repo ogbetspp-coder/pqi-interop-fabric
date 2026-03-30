@@ -11,12 +11,16 @@ Hard invariants enforced here:
 4. Unchanged resources receive a SKIPPED event, never a spurious version bump.
 """
 
+import hashlib
 import json
 import uuid
 from pathlib import Path
 
 from backend.engine import builder, delta, hapi_client
-from backend.events.outbox import record_event, record_trace
+from backend.events.outbox import (
+    record_event, record_trace,
+    record_run_start, record_run_complete, record_run_failed,
+)
 from backend.downstream.consumer import deliver_delta
 from backend.models.source_models import ErpPresentation
 from backend.sources import erp, plm, rim
@@ -30,11 +34,30 @@ def _load(filename: str) -> dict:
     return json.loads((_MAPS_DIR / filename).read_text())
 
 
+def _sha256_file(filename: str) -> str:
+    return hashlib.sha256((_MAPS_DIR / filename).read_bytes()).hexdigest()
+
+
 _material_map = _load("material_map.json")["mappings"]
 _packaging_type_map = _load("packaging_type_map.json")["mappings"]
 _closure_type_map = _load("closure_type_map.json")["mappings"]
 _dose_form_map = _load("dose_form_map.json")["mappings"]
+_route_map = _load("route_map.json")["mappings"]
 _qs_rules = _load("quality_standard_map.json")["rules"]
+_marketing_status_map = _load("marketing_status_map.json")["mappings"]
+
+# SHA-256 fingerprints of each mapping artifact — written into every trace row
+_MAPPING_ARTIFACT_HASHES: dict[str, str] = {
+    f: _sha256_file(f) for f in (
+        "material_map.json",
+        "packaging_type_map.json",
+        "closure_type_map.json",
+        "dose_form_map.json",
+        "route_map.json",
+        "quality_standard_map.json",
+        "marketing_status_map.json",
+    )
+}
 
 
 # ── engine ────────────────────────────────────────────────────────────────────
@@ -45,6 +68,7 @@ def run(presentation_ids: list[str] | None = None) -> dict:
     Returns a summary dict with run_id and event list.
     """
     run_id = str(uuid.uuid4())
+    record_run_start(run_id)
 
     presentations: list[ErpPresentation]
     if presentation_ids:
@@ -60,71 +84,80 @@ def run(presentation_ids: list[str] | None = None) -> dict:
     all_events: list[dict] = []
     changed_resources: list[dict] = []  # for downstream delta
 
-    for pres in presentations:
-        product = erp.get_product(pres.product_code)
-        if not product:
-            continue
+    try:
+        for pres in presentations:
+            product = erp.get_product(pres.product_code)
+            if not product:
+                continue
 
-        # ── MPD ───────────────────────────────────────────────────────────────
-        if pres.product_code not in seen_products:
-            seen_products.add(pres.product_code)
+            # ── MPD ───────────────────────────────────────────────────────────────
+            if pres.product_code not in seen_products:
+                seen_products.add(pres.product_code)
 
-            mpd_resource, mpd_mappings = builder.build_mpd(product, _dose_form_map)
-            mid_resource, mid_mappings = builder.build_mid(product, _dose_form_map)
+                mpd_resource, mpd_mappings = builder.build_mpd(product, _dose_form_map, _route_map)
+                mid_resource, mid_mappings = builder.build_mid(product, _dose_form_map)
 
-            mpd_evt = _process_resource(
-                run_id, mpd_resource, "MedicinalProductDefinition",
-                source_rows={"erp_product": product.model_dump()},
-                mappings=mpd_mappings,
+                mpd_evt = _process_resource(
+                    run_id, mpd_resource, "MedicinalProductDefinition",
+                    source_rows={"erp_product": product.model_dump()},
+                    mappings=mpd_mappings,
+                )
+                all_events.append(mpd_evt)
+                if mpd_evt["event_type"] in ("CREATED", "UPDATED"):
+                    changed_resources.append(mpd_resource)
+
+                mid_evt = _process_resource(
+                    run_id, mid_resource, "ManufacturedItemDefinition",
+                    source_rows={"erp_product": product.model_dump()},
+                    mappings=mid_mappings,
+                )
+                all_events.append(mid_evt)
+                if mid_evt["event_type"] in ("CREATED", "UPDATED"):
+                    changed_resources.append(mid_resource)
+
+            # ── PPD ───────────────────────────────────────────────────────────────
+            components = plm.get_components(pres.presentation_id)
+            rim_data = rim.get_rim(pres.presentation_id)
+            marketing_status = rim_data.marketing_status if rim_data else "unknown"
+            approval_date = rim_data.approval_date if rim_data else None
+
+            ppd_resource, ppd_mappings = builder.build_ppd(
+                pres, components,
+                _material_map, _packaging_type_map, _closure_type_map,
+                _qs_rules, marketing_status, _marketing_status_map, approval_date,
             )
-            all_events.append(mpd_evt)
-            if mpd_evt["event_type"] in ("CREATED", "UPDATED"):
-                changed_resources.append(mpd_resource)
-
-            mid_evt = _process_resource(
-                run_id, mid_resource, "ManufacturedItemDefinition",
-                source_rows={"erp_product": product.model_dump()},
-                mappings=mid_mappings,
+            ppd_evt = _process_resource(
+                run_id, ppd_resource, "PackagedProductDefinition",
+                source_rows={
+                    "erp_presentation": pres.model_dump(),
+                    "plm_components": [c.model_dump() for c in components],
+                    "rim_presentation": rim_data.model_dump() if rim_data else None,
+                },
+                mappings=ppd_mappings,
             )
-            all_events.append(mid_evt)
-            if mid_evt["event_type"] in ("CREATED", "UPDATED"):
-                changed_resources.append(mid_resource)
+            all_events.append(ppd_evt)
+            if ppd_evt["event_type"] in ("CREATED", "UPDATED"):
+                changed_resources.append(ppd_resource)
 
-        # ── PPD ───────────────────────────────────────────────────────────────
-        components = plm.get_components(pres.presentation_id)
-        rim_data = rim.get_rim(pres.presentation_id)
-        marketing_status = rim_data.marketing_status if rim_data else "unknown"
+        # Emit downstream delta for any changed resources
+        if changed_resources:
+            deliver_delta(run_id, all_events, changed_resources)
 
-        ppd_resource, ppd_mappings = builder.build_ppd(
-            pres, components,
-            _material_map, _packaging_type_map, _closure_type_map,
-            _qs_rules, marketing_status,
-        )
-        ppd_evt = _process_resource(
-            run_id, ppd_resource, "PackagedProductDefinition",
-            source_rows={
-                "erp_presentation": pres.model_dump(),
-                "plm_components": [c.model_dump() for c in components],
-                "rim_presentation": rim_data.model_dump() if rim_data else None,
-            },
-            mappings=ppd_mappings,
-        )
-        all_events.append(ppd_evt)
-        if ppd_evt["event_type"] in ("CREATED", "UPDATED"):
-            changed_resources.append(ppd_resource)
+    except Exception as exc:
+        record_run_failed(run_id, str(exc))
+        raise
 
-    # Emit downstream delta for any changed resources
-    if changed_resources:
-        deliver_delta(run_id, all_events, changed_resources)
+    summary = {
+        "created": sum(1 for e in all_events if e["event_type"] == "CREATED"),
+        "updated": sum(1 for e in all_events if e["event_type"] == "UPDATED"),
+        "skipped": sum(1 for e in all_events if e["event_type"] == "SKIPPED"),
+    }
+    record_run_complete(run_id, summary)
 
     return {
         "run_id": run_id,
         "events": all_events,
-        "summary": {
-            "created": sum(1 for e in all_events if e["event_type"] == "CREATED"),
-            "updated": sum(1 for e in all_events if e["event_type"] == "UPDATED"),
-            "skipped": sum(1 for e in all_events if e["event_type"] == "SKIPPED"),
-        },
+        "summary": summary,
     }
 
 
@@ -161,12 +194,20 @@ def _process_resource(
             fingerprint_after=fp_new,
             action="SKIPPED",
             reason="Fingerprint unchanged",
+            mapping_artifact_hashes=_MAPPING_ARTIFACT_HASHES,
         )
         return evt
 
-    # Changed or new — PUT to HAPI
+    # Changed or new — PUT to HAPI with optimistic locking
     old_version, _ = hapi_client.get_resource(resource_type, resource_id)
-    new_version = hapi_client.put_resource(resource_type, resource_id, resource)
+    try:
+        new_version = hapi_client.put_resource(
+            resource_type, resource_id, resource, if_match_version=old_version
+        )
+    except hapi_client.IfMatchConflict:
+        # Server has a newer version than our cache; re-read and retry unconditionally
+        old_version, _ = hapi_client.get_resource(resource_type, resource_id)
+        new_version = hapi_client.put_resource(resource_type, resource_id, resource)
     delta.store(resource_id, resource_type, fp_new)
 
     event_type = "CREATED" if old_version is None else "UPDATED"
@@ -191,6 +232,7 @@ def _process_resource(
         fingerprint_after=fp_new,
         action=event_type,
         reason="Fingerprint changed" if old_version else "New resource",
+        mapping_artifact_hashes=_MAPPING_ARTIFACT_HASHES,
     )
     return evt
 

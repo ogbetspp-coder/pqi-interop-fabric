@@ -49,6 +49,7 @@ def record_trace(
     fingerprint_after: str,
     action: str,
     reason: str | None,
+    mapping_artifact_hashes: dict | None = None,
 ) -> None:
     import json
     trace_id = str(uuid.uuid4())
@@ -56,14 +57,47 @@ def record_trace(
         """
         INSERT INTO canonical_run_traces
           (trace_id, run_id, resource_id, resource_type, source_rows,
-           mappings_applied, fingerprint_before, fingerprint_after, action, reason)
-        VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s)
+           mappings_applied, mapping_artifact_hashes,
+           fingerprint_before, fingerprint_after, action, reason)
+        VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s)
         """,
         (
             trace_id, run_id, resource_id, resource_type,
             json.dumps(source_rows), json.dumps(mappings_applied),
+            json.dumps(mapping_artifact_hashes),
             fingerprint_before, fingerprint_after, action, reason,
         ),
+    )
+
+
+def record_run_start(run_id: str) -> None:
+    execute(
+        "INSERT INTO canonical_runs (run_id, status) VALUES (%s, 'started')",
+        (run_id,),
+    )
+
+
+def record_run_complete(run_id: str, summary: dict) -> None:
+    import json
+    execute(
+        """
+        UPDATE canonical_runs
+           SET status = 'completed', completed_at = NOW(), summary = %s::jsonb
+         WHERE run_id = %s
+        """,
+        (json.dumps(summary), run_id),
+    )
+
+
+def record_run_failed(run_id: str, error: str) -> None:
+    import json
+    execute(
+        """
+        UPDATE canonical_runs
+           SET status = 'failed', completed_at = NOW(), summary = %s::jsonb
+         WHERE run_id = %s
+        """,
+        (json.dumps({"error": error}), run_id),
     )
 
 

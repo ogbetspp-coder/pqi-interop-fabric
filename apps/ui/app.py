@@ -86,12 +86,14 @@ if page == "Why This Matters":
     st.divider()
     st.markdown("**Demo product portfolio**")
 
-    products = _get("/sources/erp/products") or []
-    presentations = _get("/sources/erp/presentations") or []
+    overview = _get("/engine/ui/overview") or {}
+    products = overview.get("products") or []
+    presentations = overview.get("presentations") or []
     if products:
-        c1, c2 = st.columns(2)
-        c1.metric("Product anchors", len(products))
-        c2.metric("Active package presentations", len(presentations))
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Product anchors", overview.get("product_count", len(products)))
+        c2.metric("Active package presentations", overview.get("active_presentation_count", len(presentations)))
+        c3.metric("Canonical resources in HAPI", overview.get("canonical_resource_count", "–"))
         for p in products:
             pres_for = [x for x in presentations if x["product_code"] == p["product_code"]]
             markets = sorted({x["market"] for x in pres_for})
@@ -162,14 +164,17 @@ elif page == "Canonical Model":
         "Each package record points back to one stable product anchor."
     )
 
-    canonical = _get("/engine/canonical") or []
-    if not canonical:
+    summary = _get("/engine/ui/canonical-summary") or {}
+    resources = summary.get("resources") or []
+    counts = summary.get("counts") or {}
+
+    if not resources:
         st.info("No canonical records loaded yet. Run the engine from the Controlled Change page.")
         st.stop()
 
-    mpds = [r for r in canonical if r["resource_type"] == "MedicinalProductDefinition"]
-    mids = [r for r in canonical if r["resource_type"] == "ManufacturedItemDefinition"]
-    ppds = [r for r in canonical if r["resource_type"] == "PackagedProductDefinition"]
+    mpds = [r for r in resources if r["resource_type"] == "MedicinalProductDefinition"]
+    mids = [r for r in resources if r["resource_type"] == "ManufacturedItemDefinition"]
+    ppds = [r for r in resources if r["resource_type"] == "PackagedProductDefinition"]
 
     m1, m2, m3 = st.columns(3)
     m1.metric("Product anchors (MPD)", len(mpds))
@@ -178,31 +183,22 @@ elif page == "Canonical Model":
 
     st.markdown("**Product anchors — reusable across all variants**")
     for mpd in mpds:
-        resource = _get(f"/engine/canonical/MedicinalProductDefinition/{mpd['resource_id']}")
-        if resource:
-            name = resource.get("name", [{}])[0].get("productName", mpd["resource_id"])
-            pcode = resource.get("identifier", [{}])[0].get("value", "")
-            st.markdown(f"- **{name}** (`{mpd['resource_id']}`) · product code: {pcode} · version: {mpd['version']}")
+        name = mpd.get("display_name", mpd["resource_id"])
+        pcode = mpd.get("product_code", "")
+        st.markdown(f"- **{name}** (`{mpd['resource_id']}`) · product code: {pcode} · version: {mpd['version']}")
 
     st.divider()
     st.markdown("**Package records — one per market/presentation**")
     rows = []
     for ppd in ppds:
-        resource = _get(f"/engine/canonical/PackagedProductDefinition/{ppd['resource_id']}")
-        if resource:
-            market = ""
-            for ms in resource.get("marketingStatus", []):
-                for coding in ms.get("country", {}).get("coding", []):
-                    market = coding.get("code", "")
-            qty = resource.get("containedItemQuantity", [{}])[0]
-            rows.append({
-                "ID": ppd["resource_id"],
-                "Market": market,
-                "Count": f"{qty.get('value', '')} {qty.get('unit', '')}",
-                "Product anchor": resource.get("packageFor", [{}])[0].get("reference", "").split("/")[-1],
-                "Version": ppd["version"],
-                "Last updated": ppd["last_updated"],
-            })
+        rows.append({
+            "ID": ppd["resource_id"],
+            "Market": ppd.get("market", ""),
+            "Count": f"{ppd.get('pack_count', '')} {ppd.get('pack_unit', '')}",
+            "Product anchor": ppd.get("package_for", ""),
+            "Version": ppd["version"],
+            "Last updated": ppd["last_updated"],
+        })
     if rows:
         st.dataframe(rows, use_container_width=True, hide_index=True)
 
@@ -355,26 +351,33 @@ elif page == "Technical Evidence":
             st.error("FHIR metadata not reachable.")
 
     with tab_history:
-        st.markdown("Select a resource to see its version history.")
-        rt = st.selectbox("Resource type", ["PackagedProductDefinition", "MedicinalProductDefinition", "ManufacturedItemDefinition"])
+        st.markdown("Select a resource to see its version history and provenance trace.")
         rid = st.text_input("Resource ID", value="ppd-avl10-28ct-us")
         if rid:
-            history = _get(f"/engine/canonical/{rt}/{rid}/history")
-            if history:
-                st.dataframe(history, use_container_width=True, hide_index=True)
+            combined = _get(f"/engine/ui/resource-trace/{rid}")
+            if not combined:
+                st.info("No data found — run the engine first.")
             else:
-                st.info("No history found — run the engine first.")
+                history = combined.get("history") or []
+                trace = combined.get("trace") or {}
+                if history:
+                    st.dataframe(history, use_container_width=True, hide_index=True)
+                else:
+                    st.info("No version history yet.")
 
-            trace = _get(f"/engine/trace/{rid}")
-            if trace:
-                st.markdown("**Latest provenance trace**")
-                st.markdown(f"- Action: **{trace['action']}** · Reason: {trace['reason']}")
-                st.markdown(f"- Fingerprint before: `{(trace.get('fingerprint_before') or 'none')[:16]}...`")
-                st.markdown(f"- Fingerprint after: `{trace['fingerprint_after'][:16]}...`")
-                with st.expander("Source rows that fed this resource"):
-                    st.json(trace["source_rows"])
-                with st.expander("Mappings applied"):
-                    st.json(trace["mappings_applied"])
+                if trace:
+                    st.markdown("**Latest provenance trace**")
+                    fp_before = trace.get("fingerprint_before") or "none"
+                    st.markdown(f"- Action: **{trace['action']}** · Reason: {trace['reason']}")
+                    st.markdown(f"- Fingerprint before: `{fp_before[:16]}...`")
+                    st.markdown(f"- Fingerprint after: `{trace['fingerprint_after'][:16]}...`")
+                    if trace.get("mapping_artifact_hashes"):
+                        with st.expander("Mapping artifact hashes (tamper evidence)"):
+                            st.json(trace["mapping_artifact_hashes"])
+                    with st.expander("Source rows that fed this resource"):
+                        st.json(trace["source_rows"])
+                    with st.expander("Mappings applied"):
+                        st.json(trace["mappings_applied"])
 
     with tab_maps:
         st.markdown("Explicit local-to-canonical term mappings. Config-driven, not hardcoded in engine.")
